@@ -154,7 +154,7 @@ PVIGEM_TARGET FORCEINLINE VIGEM_TARGET_ALLOC_INIT(
     target->Size = sizeof(VIGEM_TARGET);
     target->State = VIGEM_TARGET_INITIALIZED;
     target->Type = Type;
-	target->notificationThreadList = nullptr;
+	target->notificationThreadList.clear();
     return target;
 }
 
@@ -561,7 +561,7 @@ VIGEM_ERROR vigem_target_remove(PVIGEM_CLIENT vigem, PVIGEM_TARGET target)
 void vigem_notification_thread_worker(
 	PVIGEM_CLIENT client,
 	PVIGEM_TARGET target,
-	std::unique_ptr <std::vector<std::unique_ptr<NotificationRequestPayload>>> pNotificationRequestPayload
+	std::vector<NotificationRequestPayload*> NotificationRequestPayload
 )
 {
 	int   idx;
@@ -592,11 +592,11 @@ void vigem_notification_thread_worker(
 	for (idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE-1; idx++)
 	{
 		devIoResult[idx] = DeviceIoControl(client->hBusDevice,
-			(*pNotificationRequestPayload)[idx]->ioControlCode,
-			(*pNotificationRequestPayload)[idx]->lpPayloadBuffer,
-			(*pNotificationRequestPayload)[idx]->payloadBufferSize,
-			(*pNotificationRequestPayload)[idx]->lpPayloadBuffer,
-			(*pNotificationRequestPayload)[idx]->payloadBufferSize,
+			(NotificationRequestPayload)[idx]->ioControlCode,
+			(NotificationRequestPayload)[idx]->lpPayloadBuffer,
+			(NotificationRequestPayload)[idx]->payloadBufferSize,
+			(NotificationRequestPayload)[idx]->lpPayloadBuffer,
+			(NotificationRequestPayload)[idx]->payloadBufferSize,
 			&transferred[idx],
 			&lOverlapped[idx]);
 
@@ -607,11 +607,11 @@ void vigem_notification_thread_worker(
 	{
 		// Before reading data from "current overlapped request" then send a new DeviceIoControl request to wait for upcoming new FFB events (ring buffer of overlapped objects).
 		devIoResult[futureOverlappedIdx] = DeviceIoControl(client->hBusDevice,
-			(*pNotificationRequestPayload)[futureOverlappedIdx]->ioControlCode,
-			(*pNotificationRequestPayload)[futureOverlappedIdx]->lpPayloadBuffer,
-			(*pNotificationRequestPayload)[futureOverlappedIdx]->payloadBufferSize,
-			(*pNotificationRequestPayload)[futureOverlappedIdx]->lpPayloadBuffer,
-			(*pNotificationRequestPayload)[futureOverlappedIdx]->payloadBufferSize,
+			(NotificationRequestPayload)[futureOverlappedIdx]->ioControlCode,
+			(NotificationRequestPayload)[futureOverlappedIdx]->lpPayloadBuffer,
+			(NotificationRequestPayload)[futureOverlappedIdx]->payloadBufferSize,
+			(NotificationRequestPayload)[futureOverlappedIdx]->lpPayloadBuffer,
+			(NotificationRequestPayload)[futureOverlappedIdx]->payloadBufferSize,
 			&transferred[futureOverlappedIdx],
 			&lOverlapped[futureOverlappedIdx]);
 
@@ -636,7 +636,7 @@ void vigem_notification_thread_worker(
 		}
 
 		if (GetOverlappedResult(client->hBusDevice, &lOverlapped[currentOverlappedIdx], &transferred[currentOverlappedIdx], TRUE) != 0)
-			(*pNotificationRequestPayload)[currentOverlappedIdx]->ProcessNotificationRequest(client, target);
+			(NotificationRequestPayload)[currentOverlappedIdx]->ProcessNotificationRequest(client, target);
 
 		if (currentOverlappedIdx >= NOTIFICATION_OVERLAPPED_QUEUE_SIZE-1)
 			currentOverlappedIdx = 0;
@@ -649,12 +649,21 @@ void vigem_notification_thread_worker(
 			futureOverlappedIdx++;
 	} while (target->closingNotificationThreads != TRUE && target->Notification != nullptr);
 
-	for (idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-		if(lOverlapped[idx].hEvent)
-			CloseHandle(lOverlapped[idx].hEvent);
+    for (idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+    {
+        if (lOverlapped[idx].hEvent)
+        {
+            CloseHandle(lOverlapped[idx].hEvent);
+        }
+
+        if (NotificationRequestPayload[idx])
+        {
+            delete(NotificationRequestPayload[idx]);
+        }
+    }
 
 	// Caller created the unique_ptr object, but this thread worker function should delete the object because it is no longer needed (thread specific object)
-	pNotificationRequestPayload.reset();
+	NotificationRequestPayload.clear();
 }
 
 VIGEM_ERROR vigem_target_x360_register_notification(
@@ -687,20 +696,21 @@ VIGEM_ERROR vigem_target_x360_register_notification(
 	else
 		ResetEvent(target->cancelNotificationThreadEvent);
 
-	if(target->notificationThreadList == nullptr)
-		target->notificationThreadList = std::make_unique<std::vector<std::thread>>();
+    target->notificationThreadList.clear();
 
 	target->closingNotificationThreads = FALSE;
 
-	std::unique_ptr<std::vector<std::unique_ptr<NotificationRequestPayload>>> payloadVector = std::make_unique<std::vector<std::unique_ptr<NotificationRequestPayload>>>();
-	payloadVector->reserve(NOTIFICATION_OVERLAPPED_QUEUE_SIZE);
-	for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-		payloadVector->push_back(std::make_unique<NotificationRequestPayloadX360>(target->SerialNo));
+    std::vector<NotificationRequestPayload*> payloadVector;
+	
+    for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+    {
+        payloadVector.push_back(new NotificationRequestPayloadX360(target->SerialNo));
+    }
 
 	// Nowadays there is only one background thread listening for incoming FFB events, but there used to be more. This code still uses notificationThreadList vector even
 	// when there is only one item in the vector. If it is someday find out that this logic needs more background threads then it is easy to do because the thread vector is already in place.
 	//for (int i = 0; i < 1; i++)
-	target->notificationThreadList->emplace_back(std::thread(&vigem_notification_thread_worker, vigem, target, std::move(payloadVector)));
+	target->notificationThreadList.emplace_back(std::thread(&vigem_notification_thread_worker, vigem, target, payloadVector));
 
     return VIGEM_ERROR_NONE;
 }
@@ -735,18 +745,18 @@ VIGEM_ERROR vigem_target_ds4_register_notification(
 	else
 		ResetEvent(target->cancelNotificationThreadEvent);
 
-	if (target->notificationThreadList == nullptr)
-		target->notificationThreadList = std::make_unique<std::vector<std::thread>>();
+    target->notificationThreadList.clear();
 
 	target->closingNotificationThreads = FALSE;
 
-	std::unique_ptr<std::vector<std::unique_ptr<NotificationRequestPayload>>> payloadVector = std::make_unique<std::vector<std::unique_ptr<NotificationRequestPayload>>>();
-	payloadVector->reserve(NOTIFICATION_OVERLAPPED_QUEUE_SIZE);
-	for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
-		payloadVector->push_back(std::make_unique<NotificationRequestPayloadDS4>(target->SerialNo));
+	std::vector<NotificationRequestPayload*> payloadVector;
 
-	//for (int i = 0; i < 1; i++)
-	target->notificationThreadList->emplace_back(std::thread(&vigem_notification_thread_worker, vigem, target, std::move(payloadVector)));
+    for (int idx = 0; idx < NOTIFICATION_OVERLAPPED_QUEUE_SIZE; idx++)
+    {
+        payloadVector.push_back(new NotificationRequestPayloadDS4(target->SerialNo));
+    }
+
+	target->notificationThreadList.emplace_back(std::thread(&vigem_notification_thread_worker, vigem, target, payloadVector));
 
     return VIGEM_ERROR_NONE;
 }
@@ -758,13 +768,8 @@ void vigem_target_x360_unregister_notification(PVIGEM_TARGET target)
 	if (target->cancelNotificationThreadEvent != 0)
 		SetEvent(target->cancelNotificationThreadEvent);
 
-	if (target->notificationThreadList != nullptr)
-	{
-		// Wait for completion of all notification threads before cleaning up target object and Notification function pointer (a thread may be in the middle of handling a notification request, so close it cleanly)
-		std::for_each(target->notificationThreadList->begin(), target->notificationThreadList->end(), std::mem_fn(&std::thread::join));
-		target->notificationThreadList.reset();
-		target->notificationThreadList = nullptr;
-	}
+	std::for_each(target->notificationThreadList.begin(), target->notificationThreadList.end(), std::mem_fn(&std::thread::join));
+    target->notificationThreadList.clear();
 	
 	if (target->cancelNotificationThreadEvent != 0)
 	{

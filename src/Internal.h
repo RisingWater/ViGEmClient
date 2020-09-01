@@ -25,6 +25,8 @@ SOFTWARE.
 
 #pragma once
 
+#include <memory>
+
 //
 // TODO: this is... not optimal. Improve in the future.
 // 
@@ -69,5 +71,5 @@ typedef struct _VIGEM_TARGET_T
 
 	bool closingNotificationThreads;
 	HANDLE cancelNotificationThreadEvent;
-	std::unique_ptr<std::vector<std::thread>> notificationThreadList;
+	std::vector<std::thread> notificationThreadList;
 } VIGEM_TARGET;

@@ -14,7 +14,7 @@ The `ViGEmClient` provides a small library exposing a simple API for creating an
 
 ### Prerequisites
 
-- Visual Studio **2019** ([Community Edition](https://www.visualstudio.com/thank-you-downloading-visual-studio/?sku=Community&rel=16) is just fine)
+- Visual Studio **2013**
   - When linking statically, make sure to also link against `setupapi.lib`
 
 ## Contribute
